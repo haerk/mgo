@@ -51,6 +51,7 @@ type bulkDeleteOp []interface{}
 type BulkResult struct {
 	Matched  int
 	Modified int // Available only for MongoDB 2.6+
+	Upserted  map[int]interface{}
 
 	// Be conservative while we understand exactly how to report these
 	// results in a useful and convenient way, and also how to emulate
@@ -331,6 +332,7 @@ func (b *Bulk) runUpdate(action *bulkAction, result *BulkResult, berr *BulkError
 	if lerr != nil {
 		result.Matched += lerr.N
 		result.Modified += lerr.modified
+		result.Upserted = lerr.Upserted
 	}
 	return b.checkSuccess(action, berr, lerr, err)
 }

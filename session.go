@@ -141,7 +141,7 @@ type Collection struct {
 type Query struct {
 	m       sync.Mutex
 	session *Session
-	query   // Enables default settings in session.
+	query // Enables default settings in session.
 }
 
 type query struct {
@@ -2912,7 +2912,6 @@ func (p *Pipe) SetMaxTime(d time.Duration) *Pipe {
 	return p
 }
 
-
 // Collation allows to specify language-specific rules for string comparison,
 // such as rules for lettercase and accent marks.
 // When specifying collation, the locale field is mandatory; all other collation
@@ -2939,10 +2938,10 @@ func (p *Pipe) Collation(collation *Collation) *Pipe {
 type LastError struct {
 	Err             string
 	Code, N, Waited int
-	FSyncFiles      int `bson:"fsyncFiles"`
+	FSyncFiles      int  `bson:"fsyncFiles"`
 	WTimeout        bool
-	UpdatedExisting bool        `bson:"updatedExisting"`
-	UpsertedId      interface{} `bson:"upserted"`
+	UpdatedExisting bool `bson:"updatedExisting"`
+	Upserted        map[int]interface{}
 
 	modified int
 	ecases   []BulkErrorCase
@@ -2957,7 +2956,7 @@ type queryError struct {
 	ErrMsg        string
 	Assertion     string
 	Code          int
-	AssertionCode int `bson:"assertionCode"`
+	AssertionCode int    `bson:"assertionCode"`
 }
 
 // QueryError is returned when a query fails
@@ -3022,11 +3021,41 @@ func (c *Collection) Update(selector interface{}, update interface{}) error {
 		Selector:   selector,
 		Update:     update,
 	}
-	lerr, err := c.writeOp(&op, true)
-	if err == nil && lerr != nil && !lerr.UpdatedExisting {
-		return ErrNotFound
-	}
+	_, err := c.writeOp(&op, true)
+	//if err == nil && lerr != nil && !lerr.UpdatedExisting {
+	//	return ErrNotFound
+	//}
 	return err
+}
+
+// Update finds a single document matching the provided selector document
+// and modifies it according to the update document.
+// If the session is in safe mode (see SetSafe) a ErrNotFound error is
+// returned if a document isn't found, or a value of type *LastError
+// when some other error is detected.
+//
+// Relevant documentation:
+//
+//     http://www.mongodb.org/display/DOCS/Updating
+//     http://www.mongodb.org/display/DOCS/Atomic+Operations
+//
+func (c *Collection) UpdateWithResult(selector interface{}, update interface{}) (info *ChangeInfo, err error) {
+	if selector == nil {
+		selector = bson.D{}
+	}
+	op := updateOp{
+		Collection: c.FullName,
+		Selector:   selector,
+		Update:     update,
+	}
+	lerr, err := c.writeOp(&op, true)
+	//if err == nil && lerr != nil && !lerr.UpdatedExisting {
+	//	return ErrNotFound
+	//}
+	if err == nil && lerr != nil {
+		info = &ChangeInfo{Updated: lerr.modified, Matched: lerr.N}
+	}
+	return info, err
 }
 
 // UpdateId is a convenience helper equivalent to:
@@ -3043,10 +3072,10 @@ type ChangeInfo struct {
 	// Updated reports the number of existing documents modified.
 	// Due to server limitations, this reports the same value as the Matched field when
 	// talking to MongoDB <= 2.4 and on Upsert and Apply (findAndModify) operations.
-	Updated    int
-	Removed    int         // Number of documents removed
-	Matched    int         // Number of documents matched but not necessarily changed
-	UpsertedId interface{} // Upserted _id field, when not explicitly provided
+	Updated  int
+	Removed  int                 // Number of documents removed
+	Matched  int                 // Number of documents matched but not necessarily changed
+	Upserted map[int]interface{} // Upserted _id field, when not explicitly provided
 }
 
 // UpdateAll finds all documents matching the provided selector document
@@ -3118,7 +3147,7 @@ func (c *Collection) Upsert(selector interface{}, update interface{}) (info *Cha
 			info.Matched = lerr.N
 			info.Updated = lerr.modified
 		} else {
-			info.UpsertedId = lerr.UpsertedId
+			info.Upserted = lerr.Upserted
 		}
 	}
 	return info, err
@@ -3147,10 +3176,10 @@ func (c *Collection) Remove(selector interface{}) error {
 	if selector == nil {
 		selector = bson.D{}
 	}
-	lerr, err := c.writeOp(&deleteOp{c.FullName, selector, 1, 1}, true)
-	if err == nil && lerr != nil && lerr.N == 0 {
-		return ErrNotFound
-	}
+	_, err := c.writeOp(&deleteOp{c.FullName, selector, 1, 1}, true)
+	//if err == nil && lerr != nil && lerr.N == 0 {
+	//	return ErrNotFound
+	//}
 	return err
 }
 
@@ -4638,7 +4667,7 @@ func (c *Collection) Count() (n int, err error) {
 }
 
 type distinctCmd struct {
-	Collection string `bson:"distinct"`
+	Collection string      `bson:"distinct"`
 	Key        string
 	Query      interface{} `bson:",omitempty"`
 }
@@ -4677,10 +4706,10 @@ func (q *Query) Distinct(key string, result interface{}) error {
 }
 
 type mapReduceCmd struct {
-	Collection string `bson:"mapreduce"`
-	Map        string `bson:",omitempty"`
-	Reduce     string `bson:",omitempty"`
-	Finalize   string `bson:",omitempty"`
+	Collection string      `bson:"mapreduce"`
+	Map        string      `bson:",omitempty"`
+	Reduce     string      `bson:",omitempty"`
+	Finalize   string      `bson:",omitempty"`
 	Out        interface{}
 	Query      interface{} `bson:",omitempty"`
 	Sort       interface{} `bson:",omitempty"`
@@ -4727,7 +4756,7 @@ type MapReduceInfo struct {
 
 // MapReduceTime stores execution time of a MapReduce operation
 type MapReduceTime struct {
-	Total    int64 // Total time, in nanoseconds
+	Total    int64                   // Total time, in nanoseconds
 	Map      int64 `bson:"mapTime"`  // Time within map function, in nanoseconds
 	EmitLoop int64 `bson:"emitLoop"` // Time within the emit/map loop, in nanoseconds
 }
@@ -5021,7 +5050,7 @@ func (q *Query) Apply(change Change, result interface{}) (info *ChangeInfo, err 
 		info.Removed = lerr.N
 		info.Matched = lerr.N
 	} else if change.Upsert {
-		info.UpsertedId = lerr.UpsertedId
+		info.Upserted = lerr.Upserted
 	}
 	if doc.ConcernError.Code != 0 {
 		var lerr LastError
@@ -5047,7 +5076,7 @@ type BuildInfo struct {
 	SysInfo        string `bson:"sysInfo"` // Deprecated and empty on MongoDB 3.2+.
 	Bits           int
 	Debug          bool
-	MaxObjectSize  int `bson:"maxBsonObjectSize"`
+	MaxObjectSize  int    `bson:"maxBsonObjectSize"`
 }
 
 // VersionAtLeast returns whether the BuildInfo version is greater than or
@@ -5276,7 +5305,7 @@ type writeCmdResult struct {
 	Ok        bool
 	N         int
 	NModified int `bson:"nModified"`
-	Upserted  []struct {
+	Upserted []struct {
 		Index int
 		Id    interface{} `bson:"_id"`
 	}
@@ -5319,7 +5348,6 @@ func (c *Collection) writeOp(op interface{}, ordered bool) (lerr *LastError, err
 	safeOp := s.safeOp
 	bypassValidation := s.bypassValidation
 	s.m.RUnlock()
-
 	if socket.ServerInfo().MaxWireVersion >= 2 {
 		// Servers with a more recent write protocol benefit from write commands.
 		if op, ok := op.(*insertOp); ok && len(op.documents) > 1000 {
@@ -5550,12 +5578,15 @@ func (c *Collection) writeOpCommand(socket *mongoSocket, safeOp *queryOp, op int
 	lerr = &LastError{
 		UpdatedExisting: result.N > 0 && len(result.Upserted) == 0,
 		N:               result.N,
+		Upserted: map[int]interface{}{},
 
 		modified: result.NModified,
 		ecases:   ecases,
 	}
 	if len(result.Upserted) > 0 {
-		lerr.UpsertedId = result.Upserted[0].Id
+		for _, item := range result.Upserted {
+			lerr.Upserted[item.Index] = item.Id
+		}
 	}
 	if len(result.Errors) > 0 {
 		e := result.Errors[0]

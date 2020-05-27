@@ -406,6 +406,7 @@ func (socket *mongoSocket) SimpleQuery(op *queryOp) (data []byte, err error) {
 		return nil, err
 	}
 	wait.Lock()
+	wait.Unlock()
 	change.Lock()
 	data = replyData
 	err = replyErr
